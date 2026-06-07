@@ -58,6 +58,13 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 magic_t magic = NULL;
 #endif
 
+/* UTF-8 text rendering using FreeType2 + HarfBuzz + fontconfig */
+#include <ft2build.h>
+#include FT_FREETYPE_H
+#include <harfbuzz/hb.h>
+#include <harfbuzz/hb-ft.h>
+#include <fontconfig/fontconfig.h>
+
 Display *disp = NULL;
 Visual *vis = NULL;
 Screen *scr = NULL;
@@ -1101,10 +1108,174 @@ void feh_draw_errstr(winwidget w)
 	gib_imlib_free_image_and_decache(im);
 }
 
+
+/* --- UTF-8 text rendering --- */
+static FT_Library feh_ft_library = NULL;
+
+static const char *feh_fc_font_for_codepoint(unsigned long codepoint) {
+    static char path[1024];
+    FcCharSet *charset = FcCharSetCreate();
+    FcCharSetAddChar(charset, codepoint);
+    FcPattern *pattern = FcPatternCreate();
+    FcPatternAddCharSet(pattern, FC_CHARSET, charset);
+    FcPatternAddString(pattern, FC_FAMILY, (FcChar8 *)"sans");
+    FcConfigSubstitute(NULL, pattern, FcMatchPattern);
+    FcDefaultSubstitute(pattern);
+    FcResult result;
+    FcPattern *match = FcFontMatch(NULL, pattern, &result);
+    FcChar8 *font_path = NULL;
+    path[0] = '\0';
+    if (match && FcPatternGetString(match, FC_FILE, 0, &font_path) == FcResultMatch)
+        strncpy(path, (const char *)font_path, sizeof(path) - 1);
+    FcPatternDestroy(match);
+    FcPatternDestroy(pattern);
+    FcCharSetDestroy(charset);
+    return path;
+}
+
+static unsigned long feh_utf8_next(const unsigned char **p, int *char_len) {
+    unsigned long cp = 0;
+    if (**p < 0x80)      { cp = **p;                                                                                    *char_len = 1; }
+    else if (**p < 0xE0) { cp = (**p & 0x1F) << 6  | (*(*p+1) & 0x3F);                                                *char_len = 2; }
+    else if (**p < 0xF0) { cp = (**p & 0x0F) << 12 | (*(*p+1) & 0x3F) << 6  | (*(*p+2) & 0x3F);                      *char_len = 3; }
+    else                 { cp = (**p & 0x07) << 18 | (*(*p+1) & 0x3F) << 12 | (*(*p+2) & 0x3F) << 6 | (*(*p+3) & 0x3F); *char_len = 4; }
+    return cp;
+}
+
+static int feh_render_run(uint32_t *data, int img_w, int img_h,
+                          const char *font_path, const char *text,
+                          int pen_x, int baseline,
+                          int r, int g, int b, int alpha) {
+    if (!font_path || !font_path[0]) return pen_x;
+    FT_Face ft_face;
+    if (FT_New_Face(feh_ft_library, font_path, 0, &ft_face) != 0)
+        return pen_x;
+    FT_Set_Pixel_Sizes(ft_face, 0, 11);
+    hb_font_t *hb_font = hb_ft_font_create(ft_face, NULL);
+    hb_buffer_t *buf = hb_buffer_create();
+    hb_buffer_add_utf8(buf, text, -1, 0, -1);
+    hb_buffer_guess_segment_properties(buf);
+    hb_shape(hb_font, buf, NULL, 0);
+    unsigned int glyph_count;
+    hb_glyph_info_t *glyph_info = hb_buffer_get_glyph_infos(buf, &glyph_count);
+    hb_glyph_position_t *glyph_pos = hb_buffer_get_glyph_positions(buf, &glyph_count);
+    for (unsigned int i = 0; i < glyph_count; i++) {
+        FT_Load_Glyph(ft_face, glyph_info[i].codepoint, FT_LOAD_RENDER);
+        FT_Bitmap *gb = &ft_face->glyph->bitmap;
+        int x0 = pen_x + (glyph_pos[i].x_offset >> 6) + ft_face->glyph->bitmap_left;
+        int y0 = baseline - (glyph_pos[i].y_offset >> 6) - ft_face->glyph->bitmap_top;
+        for (int row = 0; row < (int)gb->rows; row++) {
+            for (int col = 0; col < (int)gb->width; col++) {
+                int x = x0 + col;
+                int y = y0 + row;
+                if (x < 0 || x >= img_w || y < 0 || y >= img_h) continue;
+                unsigned char ga = gb->buffer[row * gb->pitch + col];
+                if (ga == 0) continue;
+                uint32_t *pixel = &data[y * img_w + x];
+                int src_a = (ga * alpha) / 255;
+                int dst_a = (*pixel >> 24) & 0xFF;
+                int dst_r = (*pixel >> 16) & 0xFF;
+                int dst_g = (*pixel >>  8) & 0xFF;
+                int dst_b = (*pixel      ) & 0xFF;
+                int out_a = src_a + dst_a * (255 - src_a) / 255;
+                int out_r = (r * src_a + dst_r * (255 - src_a)) / 255;
+                int out_g = (g * src_a + dst_g * (255 - src_a)) / 255;
+                int out_b = (b * src_a + dst_b * (255 - src_a)) / 255;
+                *pixel = ((uint32_t)out_a << 24) | ((uint32_t)out_r << 16) |
+                         ((uint32_t)out_g <<  8) |  (uint32_t)out_b;
+            }
+        }
+        pen_x += glyph_pos[i].x_advance >> 6;
+    }
+    hb_buffer_destroy(buf);
+    hb_font_destroy(hb_font);
+    FT_Done_Face(ft_face);
+    return pen_x;
+}
+
+static int feh_utf8_text_width(const char *text) {
+    int pen_x = 0;
+    const unsigned char *p = (const unsigned char *)text;
+    while (*p) {
+        int char_len = 0;
+        unsigned long codepoint = feh_utf8_next(&p, &char_len);
+        p += char_len;
+        const char *font_path = strdup(feh_fc_font_for_codepoint(codepoint));
+        char run_buf[256];
+        int run_len = char_len;
+        memcpy(run_buf, p - char_len, char_len);
+        while (*p && run_len < 250) {
+            int cl = 0;
+            unsigned long cp = feh_utf8_next(&p, &cl);
+            if (strcmp(feh_fc_font_for_codepoint(cp), font_path) != 0) break;
+            memcpy(run_buf + run_len, p, cl);
+            run_len += cl;
+            p += cl;
+        }
+        run_buf[run_len] = '\0';
+        FT_Face ft_face;
+        if (FT_New_Face(feh_ft_library, font_path, 0, &ft_face) == 0) {
+            FT_Set_Pixel_Sizes(ft_face, 0, 11);
+            hb_font_t *hb_font = hb_ft_font_create(ft_face, NULL);
+            hb_buffer_t *buf = hb_buffer_create();
+            hb_buffer_add_utf8(buf, run_buf, -1, 0, -1);
+            hb_buffer_guess_segment_properties(buf);
+            hb_shape(hb_font, buf, NULL, 0);
+            unsigned int gc;
+            hb_glyph_position_t *gp = hb_buffer_get_glyph_positions(buf, &gc);
+            for (unsigned int i = 0; i < gc; i++)
+                pen_x += gp[i].x_advance >> 6;
+            hb_buffer_destroy(buf);
+            hb_font_destroy(hb_font);
+            FT_Done_Face(ft_face);
+        }
+        free((void *)font_path);
+    }
+    return pen_x;
+}
+
+void feh_draw_text_utf8(Imlib_Image im, const char *text,
+                        int x, int y, int r, int g, int b, int alpha) {
+    if (!text || !text[0]) return;
+    if (!feh_ft_library) FT_Init_FreeType(&feh_ft_library);
+    FcInit();
+    imlib_context_set_image(im);
+    int img_w = imlib_image_get_width();
+    int img_h = imlib_image_get_height();
+    uint32_t *data = imlib_image_get_data();
+    if (!data) return;
+    int baseline = y + 11;
+    int pen_x = x;
+    const unsigned char *p = (const unsigned char *)text;
+    while (*p) {
+        int char_len = 0;
+        unsigned long codepoint = feh_utf8_next(&p, &char_len);
+        p += char_len;
+        const char *font_path = strdup(feh_fc_font_for_codepoint(codepoint));
+        char run_buf[256];
+        int run_len = char_len;
+        memcpy(run_buf, p - char_len, char_len);
+        while (*p && run_len < 250) {
+            int cl = 0;
+            unsigned long cp = feh_utf8_next(&p, &cl);
+            if (strcmp(feh_fc_font_for_codepoint(cp), font_path) != 0) break;
+            memcpy(run_buf + run_len, p, cl);
+            run_len += cl;
+            p += cl;
+        }
+        run_buf[run_len] = '\0';
+        pen_x = feh_render_run(data, img_w, img_h, font_path, run_buf,
+                               pen_x, baseline, r, g, b, alpha);
+        free((void *)font_path);
+    }
+    imlib_image_put_back_data(data);
+}
+/* --- end UTF-8 text rendering --- */
+
 void feh_draw_filename(winwidget w)
 {
-	static Imlib_Font fn = NULL;
-	int tw = 0, th = 0, nw = 0;
+	static Imlib_Font fn = NULL; /* kept for other functions that still use it */
+	int tw = 0, th = 14, nw = 0;
 	Imlib_Image im = NULL;
 	char *s = NULL;
 	int len = 0;
@@ -1113,11 +1284,11 @@ void feh_draw_filename(winwidget w)
 			|| (!FEH_FILE(w->file->data)->filename))
 		return;
 
-	fn = feh_load_font(w);
+	if (!feh_ft_library) FT_Init_FreeType(&feh_ft_library);
+	FcInit();
 
-	/* Work out how high the font is */
-	gib_imlib_get_text_size(fn, FEH_FILE(w->file->data)->filename, NULL, &tw,
-			&th, IMLIB_TEXT_TO_RIGHT);
+	/* measure text width using UTF-8 aware function */
+	tw = feh_utf8_text_width(FEH_FILE(w->file->data)->filename);
 
 	if (gib_list_length(filelist) > 1) {
 		len = snprintf(NULL, 0, "%d of %d",  gib_list_length(filelist),
@@ -1130,28 +1301,27 @@ void feh_draw_filename(winwidget w)
 			snprintf(s, len, "%d of %d", gib_list_num(filelist, current_file) +
 					1, gib_list_length(filelist));
 
-		gib_imlib_get_text_size(fn, s, NULL, &nw, NULL, IMLIB_TEXT_TO_RIGHT);
+		nw = feh_utf8_text_width(s);
 
 		if (nw > tw)
 			tw = nw;
 	}
 
-	tw += 3;
+	tw += 6;
 	th += 3;
 	im = imlib_create_image(tw, 2 * th);
 	if (!im)
-		eprintf("Couldn't create image. Out of memory?");
+		eprintf("Couldn’t create image. Out of memory?");
 
 	feh_imlib_image_fill_text_bg(im, tw, 2 * th);
 
-	gib_imlib_text_draw(im, fn, NULL, 2, 2, FEH_FILE(w->file->data)->filename,
-			IMLIB_TEXT_TO_RIGHT, 0, 0, 0, 255);
-	gib_imlib_text_draw(im, fn, NULL, 1, 1, FEH_FILE(w->file->data)->filename,
-			IMLIB_TEXT_TO_RIGHT, 255, 255, 255, 255);
+	/* shadow (black) then white text on top */
+	feh_draw_text_utf8(im, FEH_FILE(w->file->data)->filename, 2, 2, 0, 0, 0, 255);
+	feh_draw_text_utf8(im, FEH_FILE(w->file->data)->filename, 1, 1, 255, 255, 255, 255);
 
 	if (s) {
-		gib_imlib_text_draw(im, fn, NULL, 2, th + 1, s, IMLIB_TEXT_TO_RIGHT, 0, 0, 0, 255);
-		gib_imlib_text_draw(im, fn, NULL, 1, th, s, IMLIB_TEXT_TO_RIGHT, 255, 255, 255, 255);
+		feh_draw_text_utf8(im, s, 2, th + 1, 0, 0, 0, 255);
+		feh_draw_text_utf8(im, s, 1, th, 255, 255, 255, 255);
 		free(s);
 	}
 

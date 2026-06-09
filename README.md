@@ -1,170 +1,174 @@
-# feh - Image Viewer and Cataloguer
+# fuh — Image Viewer with UTF-8 Filename Support
 
-**feh** is a light-weight, configurable and versatile image viewer.
-It is aimed at command line users, but can also be started from graphical file
-managers. Apart from viewing images, it can compile text and thumbnail
-listings, show (un)loadable files, set X11 backgrounds, and more.
+**fuh** is a fork of [feh](https://feh.finalrewind.org/), the fast and lightweight X11 image viewer.
+It adds proper UTF-8 filename rendering so that filenames in non-Latin scripts — Mongolian, Tangut, Cyrillic, Chinese,
+Japanese, Arabic, Hebrew, Tibetan, Amharic, emoji, and hundreds of others — display correctly instead
+of showing boxes or garbled characters.
 
-Features include filelists, various image sorting modes, custom action scripts,
-and image captions. feh can be controlled by configurable keyboard and mouse
-shortcuts, terminal input and signals.  When no file arguments or filelists are
-specified, feh displays all files in the current directory.
+## Screenshots
 
-This README focuses on installation and contribution instructions.  See the
-[feh homepage](https://feh.finalrewind.org/) and the
-[feh(1) manual](https://man.finalrewind.org/1/feh/) for usage instructions.
+**fuh — non-Latin filenames render correctly:**
 
-## Dependencies
+![fuh rendering Mongolian filename with emoji](docs/01a.webp)
 
- * Imlib2
- * libcurl (disable with `curl=0`)
- * libpng
- * libX11
- * libXt
- * libXinerama (disable with `xinerama=0`)
+![fuh rendering mixed-script filename bar](docs/02a.webp)
 
-Only when building with `exif=1`:
+**feh — same filenames show as boxes:**
 
- * libexif-dev
- * libexif12
+![feh showing boxes for Mongolian filename](docs/01b.webp)
 
-Only when building with `magic=1`:
+![feh showing boxes for mixed-script filename](docs/02b.webp)
 
- * libmagic
+## Disclaimer
 
-## Build Process
+This project has only been tested on Apple Silicon (macOS). It is provided as-is, with no
+guarantees of correctness, stability, or fitness for any particular purpose. Use it at your
+own consideration.
 
-feh has been packaged for a variety of distributions, including
-[Arch Linux](https://archlinux.org/packages/extra/x86_64/feh/),
-[Debian](https://packages.debian.org/search?keywords=feh&exact=1),
-[FreeBSD](https://www.freshports.org/graphics/feh), and
-[Ubuntu](https://packages.ubuntu.com/search?keywords=feh&exact=1).
-You can configure, compile and install a custom version as follows.
+Linux and Intel Mac builds are not currently supported. Contributions are welcome.
 
-### Configuration
+## The Problem
 
-feh's build process uses make flags to enable/disable optional features and
-fine-tune the build and installation process. It uses (hopefully) reasonable
-defaults, so you can skip this section if you like.
+feh renders on-screen text (filenames, menus, info overlays) using
+[Imlib2](https://docs.enlightenment.org/api/imlib2/html/), which only supports ISO-8859 encodings.
+Any filename containing characters outside the Latin alphabet is displayed as a row of empty boxes.
 
-Make flags can be passed as **make** arguments or set as environment variables,
-like so:
+## The Fix
 
-```bash
-$ make flag=bool
-$ make install flag=bool
+fuh replaces Imlib2's text rendering with a proper Unicode pipeline:
+
 ```
-or
-```bash
-$ export flag=bool
-$ make && make install
+UTF-8 filename
+    -> fontconfig   (finds the right system font for each script)
+    -> HarfBuzz     (shapes glyphs: handles RTL, ligatures, cursive joining, stacking)
+    -> FreeType2    (renders glyphs to pixels)
+    -> Imlib2 image buffer
 ```
 
-The following flags are respected by the makefile. A default value of **1**
-indicates that the corresponding feature is enabled by default.
+Arabic renders right-to-left with correct joining, Tibetan stacks correctly, Chinese characters
+use the correct system CJK font, and every other script is handled automatically by your system's
+font infrastructure — no configuration required.
 
-| Flag | Default value | Description |
-| :--- | :---: | :--- |
-| app  | 0 | install icons to /usr/share, regardless of `DESTDIR` and `PREFIX`, and call gtk-update-icon-cache afterwards |
-| curl | 1 | use libcurl to view https:// and similar images |
-| debug | 0 | debug build, enables `--debug` |
-| exif | 0 | Builtin EXIF tag display support |
-| help | 0 | include help text (refers to the manpage otherwise) |
-| inotify | 0 | enable inotify, needed for `--auto-reload` |
-| stat64 | 0 | Support CIFS shares from 64bit hosts on 32bit machines |
-| magic | 0 | Use libmagic to filter unsupported file formats |
-| mkstemps | 1 | Whether your libc provides `mkstemps()`. If set to 0, feh will be unable to load gif images via libcurl |
-| verscmp | 1 | Whether your libc provides `strvercmp()`. If set to 0, feh will use an internal implementation. |
-| xinerama | 1 | Support Xinerama/XRandR multiscreen setups |
+## Installation
 
-For example, `make xinerama=0 debug=1` will disable Xinerama support and
-produce a debug build; libcurl and natural sorting support will remain enabled.
-
-Additionally, it supports the standard variables `CFLAGS`, `LDLIBS`, `PREFIX`,
-and `DESTDIR`.
-
-**PREFIX _(default: /usr/local)_** controls where the application and its data files
-will be installed. It must be set both during `make` and `make install`.
-
-**DESTDIR _(default: empty)_** sets the installation root during "make install". It
-is mostly useful for package maintainers.
-
-**Note:** Defaults are specified in `config.mk`. It is designed so that in most
-cases, you can set environment variables instead of editing it. E.g.:
+### Homebrew (macOS, recommended)
 
 ```bash
-$ CFLAGS='-g -Os' make
-```
-```bash
-$ export DESTDIR=/tmp/feh PREFIX=/usr
-$ make && make install
+brew tap bjargal/fuh
+brew install fuh
 ```
 
-Builtin EXIF support is maintained by Dennis Real, [here](https://github.com/reald/feh).
-
-### Installation
-
-Add your own make flags to the following examples as needed.
-
-**For end users:**
-```bash
-$ make
-$ sudo make install app=1
-```
-
-**For package maintainers and users who do not want feh to install its
-icons into /usr/share:**
-```bash
-$ make
-$ sudo make install
-```
-
-**Explanation:** feh ships some icons and an X11 desktop entry, which allow it to
-be used from file managers, desktop menus and similar. However, installing
-icons to /usr/local/share/... does not seem to work reliably.
-Because of this, when using "make install app=1", feh will install its icons
-to /usr/share/..., even though they technically belong into /usr/local.
-
-[ZSH completion for
-feh](https://git.finalrewind.org/zsh/plain/etc/completions/_feh) is also
-available.
-
-## Testing (non-X11)
-
-The non-X11 parts of feh can be automatically tested by running
+### Building from source (macOS, Apple Silicon)
 
 ```bash
-$ make test
+git clone https://github.com/bjargal/fuh.git
+cd fuh
+make \
+  CFLAGS="-I/opt/homebrew/include -I/opt/homebrew/include/freetype2 -I/opt/homebrew/include/harfbuzz -DPREFIX='\"/opt/homebrew\"' -DPACKAGE='\"fuh\"' -DVERSION='\"1.1.4\"'" \
+  LDFLAGS="-L/opt/homebrew/lib -lfreetype -lfontconfig -lharfbuzz" \
+  verscmp=0
 ```
-This requires **perl >= 5.10** and the perl module `Test::Command`. Tests are
-non-interactive and do not require a running X11, so they can safely be run on
-a headless buildserver.
 
-## Contributing
+The following additional dependencies are required beyond feh's standard ones:
 
-Bugfixes are always welcome, just open a pull request :)
+| Library | Purpose |
+|---|---|
+| FreeType2 | Glyph rendering |
+| HarfBuzz | Text shaping (RTL, ligatures, stacking) |
+| fontconfig | Runtime font discovery per script |
 
-Before proposing a new feature, please consider the scope of feh: It is an
-image viewer and cataloguer, not an image editor or similar. Also, its option
-list is already pretty long. Please discuss your ideas in a feature request
-before opening a pull request in this case. Also, keep in mind that feh is
-developed as a hobby project and that there is absolutely no obligation for
-anyone to implement requested features or review merge requests.
+```bash
+brew install freetype harfbuzz fontconfig
+```
 
-Please keep in mind that feh's options, key bindings and format specifiers are
-documented in two different places: The manual (man/feh.pre) and the help text
-(src/help.raw). Although the help is not compiled in by default, it should be
-kept up-to-date. On space-constrained embedded systems, it may be more useful
-than the (significantly larger) man page.
+## Usage
 
-"AI" (as in, Large Language Models / LLMs such as ChatGPT, Claude, Copilot,
-Cursor, Grok, etc.) may not be used to generate code for contributions to this
-project.
+fuh is a drop-in replacement for feh. All feh options, keybindings and behaviour are identical.
+The only differences are that text overlays now render UTF-8 correctly, and one new option is
+available:
 
-## References
+```
+--font-size N    Set overlay and menu font size in pixels (default: 11)
+```
 
-Mirrors of the feh repository are available at:
+Long filenames are automatically wrapped to fit the window width.
 
-* [Codeberg](https://codeberg.org/derf/feh)
-* [Finalrewind](https://git.finalrewind.org/derf/feh/)
-* [GitHub](https://github.com/derf/feh)
+```bash
+# display filename overlay
+fuh --draw-filename image.jpg
+
+# larger font
+fuh --font-size 16 --draw-filename image.jpg
+
+# slideshow
+fuh --draw-filename /path/to/images/
+```
+
+See `man fuh` for full documentation.
+
+## What has changed from feh
+
+**`src/imlib.c`** — Core change. Adds a UTF-8 text rendering pipeline using FreeType2,
+HarfBuzz, and fontconfig. Replaces `gib_imlib_text_draw()` calls in `feh_draw_filename()`
+with new UTF-8-aware functions. Implements font fallback for scripts that fontconfig does not
+reliably match on macOS (Tibetan via Kokonor, Amharic via Kefa, emoji via Apple Color Emoji).
+Adds cluster-aware glyph rendering for stacking scripts. Adds multiline filename wrapping
+based on window width.
+
+**`src/menu.c`** — Replaces `gib_imlib_text_draw()` and `gib_imlib_get_text_size()` in the
+menu rendering path so menu items with non-Latin text render correctly.
+
+**`src/options.c` / `src/options.h`** — Adds `--font-size` command-line option.
+
+**`src/feh.h`** — Public declarations for `feh_draw_text_utf8()` and `feh_utf8_text_width()`.
+
+**`src/Makefile` / `Makefile`** — Output binary renamed from `feh` to `fuh`.
+
+**`man/feh.pre`** — Documents `--font-size`, updates contacts, URLs, and copyright.
+
+Everything else — image loading, slideshow, wallpaper setting, thumbnail generation,
+keybindings — is unchanged from feh.
+
+## Font selection
+
+fuh selects fonts automatically at runtime:
+
+1. User-specified font via `--font` (same as feh)
+2. Best system font per codepoint via fontconfig
+3. Hardcoded macOS fallbacks for scripts where fontconfig matching is unreliable:
+   Tibetan (Kokonor), Amharic (Kefa), emoji (Apple Color Emoji)
+4. Bundled yudit.ttf as last resort (Latin only, original feh behaviour)
+
+## Relationship to feh
+
+fuh tracks feh's releases. The goal is to keep the diff minimal so that upstream feh
+improvements can be merged cleanly.
+
+Upstream feh repository: https://github.com/derf/feh
+
+The feh project does not accept AI-assisted contributions. fuh exists as a separate fork
+precisely so this fix can be available to people who need it, without conflicting with
+upstream's contribution policy.
+
+## Development notes
+
+This project was vibe-coded in [Claude](https://claude.ai) (Anthropic) in a single session.
+The approach — using FreeType2, HarfBuzz, and fontconfig to replace Imlib2's text rendering —
+was developed interactively, from diagnosing the root cause through to a working proof of
+concept and integration into feh's source code.
+
+## License
+
+fuh is distributed under the same license as feh (MIT-feh).
+
+```
+Copyright (C) 1999,2000 Tom Gilbert.
+Copyright (C) 2010-2025 Birte Kristina Friesel.
+Copyright (C) 2025 Jargal Badagarov.
+```
+
+See [COPYING](COPYING) for the full license text.
+
+## Name
+
+fuh stands for feh unicode. Because sometimes things just work, and you go "fuh, finally."

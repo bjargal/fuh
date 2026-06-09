@@ -38,12 +38,12 @@ install-doc: AUTHORS ChangeLog README.md TODO
 	@chmod 644 ${doc_dir}/AUTHORS ${doc_dir}/ChangeLog ${doc_dir}/README.md \
 		${doc_dir}/TODO
 
-install-bin: src/feh
+install-bin: src/fuh
 	@echo installing executables to ${bin_dir}
 	@mkdir -p ${bin_dir}
-	@cp src/feh ${bin_dir}/feh.tmp
-	@mv ${bin_dir}/feh.tmp ${bin_dir}/feh
-	@chmod 755 ${bin_dir}/feh
+	@cp src/fuh ${bin_dir}/fuh.tmp
+	@mv ${bin_dir}/fuh.tmp ${bin_dir}/fuh
+	@chmod 755 ${bin_dir}/fuh
 
 install-font:
 	@echo installing fonts to ${font_dir}
@@ -88,7 +88,7 @@ install-applications: share/applications/feh.desktop
 uninstall:
 	rm -f ${man_dir}/man1/feh.1
 	rm -rf ${doc_dir}
-	rm -f ${bin_dir}/feh
+	rm -f ${bin_dir}/fuh
 	rm -f ${desktop_dir}/feh.desktop
 	rm -rf ${font_dir}
 	rm -rf ${image_dir}

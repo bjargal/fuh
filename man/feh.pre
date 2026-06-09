@@ -433,6 +433,14 @@ directory, and should be defined in the form fontname/size, like
 .Qq yudit/12
 .Pq which is the default .
 .
+.It Cm \-\-font\-size Ar size
+.
+Set the font size in pixels for filename overlays and menus.
+Default is 11.
+Unlike
+.Cm \-\-font ,
+this option works with fuh's UTF-8 rendering pipeline and accepts any integer value.
+.
 .It Cm \-C , \-\-fontpath Ar path
 .
 Specify

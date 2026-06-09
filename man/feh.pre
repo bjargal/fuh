@@ -431,7 +431,7 @@ Set global font.
 Should be a truetype font, resident in the current directory or the font
 directory, and should be defined in the form fontname/size, like
 .Qq yudit/12
-.Pq which is the default .
+.Pq which is the upstream feh default; fuh uses system fonts via fontconfig by default .
 .
 .It Cm \-\-font\-size Ar size
 .
@@ -2091,7 +2091,7 @@ Multiwindow mode: reload all images.
 .
 Here are some examples of useful option combinations.
 See also:
-.Aq https://feh.finalrewind.org/examples/
+.Aq https://github.com/bjargal/fuh
 .
 .Bl -tag -width indent
 .
@@ -2252,19 +2252,15 @@ window slightly too large.
 .
 .Ss REPORTING BUGS
 .
-If you find a bug, please report it to
-.Aq derf+feh@finalrewind.org
-or via
-.Aq https://github.com/derf/feh/issues .
+If you find a bug in fuh, please report it via
+.Aq https://github.com/bjargal/fuh/issues .
 .
 .Pp
 .
-Please include the feh version
-.Aq the output of Qq feh \-\-version ,
+Please include the fuh version
+.Aq the output of Qq fuh \-\-version ,
 steps to reproduce the bug and, if necessary, images to reproduce it.
-Note that
-.Nm
-is a hobby project, so bug reports may be addressed with significant delays.
+Note that fuh is tested on Apple Silicon macOS only and is provided as-is.
 .
 .
 .Sh LICENSE
@@ -2272,6 +2268,7 @@ is a hobby project, so bug reports may be addressed with significant delays.
 Copyright (C) 1999, 2000 by Paul Duncan.
 Copyright (C) 1999, 2000 by Tom Gilbert and contributors.
 Copyright (C) 2010-2025 by Birte Kristina Friesel and contributors.
+Copyright (C) 2025 by Jargal Badagarov.
 .
 .Pp
 .
@@ -2301,17 +2298,21 @@ SOFTWARE.
 .
 .Pp
 .
-Current developer: Birte Friesel
-.Aq derf@finalrewind.org
+fuh fork maintainer: Jargal Badagarov
+.Aq https://github.com/bjargal/fuh
 .
 .Pp
 .
-Original author
+Upstream feh developer: Birte Friesel
+.Aq https://github.com/bjargal/fuh
+.
+.Pp
+.
+Original feh author
 .Pq no longer developing :
 Tom Gilbert
-.Aq feh_sucks@linuxbrit.co.uk
 .
 .Pp
 .
 Website:
-https://feh.finalrewind.org
+https://github.com/bjargal/fuh

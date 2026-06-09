@@ -1114,6 +1114,25 @@ static FT_Library feh_ft_library = NULL;
 
 static const char *feh_fc_font_for_codepoint(unsigned long codepoint) {
     static char path[1024];
+    /* Tibetan - use Kokonor for best rendering */
+    if (codepoint >= 0x0F00 && codepoint <= 0x0FFF) {
+        if (access("/System/Library/Fonts/Supplemental/Kokonor.ttf", R_OK) == 0)
+            return "/System/Library/Fonts/Supplemental/Kokonor.ttf";
+    }
+    /* Ethiopic/Amharic - fontconfig lang matching unreliable on macOS */
+    if (codepoint >= 0x1200 && codepoint <= 0x137F) {
+        if (access("/System/Library/Fonts/Supplemental/Kefa.ttc", R_OK) == 0)
+            return "/System/Library/Fonts/Supplemental/Kefa.ttc";
+    }
+    /* emoji ranges - fontconfig charset matching unreliable for these */
+    if ((codepoint >= 0x1F300 && codepoint <= 0x1FAFF) ||
+        (codepoint >= 0x2600  && codepoint <= 0x27BF)  ||
+        (codepoint >= 0x1F000 && codepoint <= 0x1F2FF)) {
+        if (access("/System/Library/Fonts/Apple Color Emoji.ttc", R_OK) == 0)
+            return "/System/Library/Fonts/Apple Color Emoji.ttc";
+        if (access("/Users/jb/Library/Fonts/NotoColorEmoji-Regular.ttf", R_OK) == 0)
+            return "/Users/jb/Library/Fonts/NotoColorEmoji-Regular.ttf";
+    }
     FcCharSet *charset = FcCharSetCreate();
     FcCharSetAddChar(charset, codepoint);
     FcPattern *pattern = FcPatternCreate();
@@ -1150,7 +1169,21 @@ static int feh_render_run(uint32_t *data, int img_w, int img_h,
     FT_Face ft_face;
     if (FT_New_Face(feh_ft_library, font_path, 0, &ft_face) != 0)
         return pen_x;
-    FT_Set_Pixel_Sizes(ft_face, 0, 11);
+
+    /* color emoji fonts have fixed sizes, use nearest available size */
+    int is_color = (ft_face->num_fixed_sizes > 0);
+    if (is_color) {
+        /* find best fixed size */
+        int best = 0;
+        for (int s = 1; s < ft_face->num_fixed_sizes; s++) {
+            if (abs(ft_face->available_sizes[s].height - opt.font_size) < abs(ft_face->available_sizes[best].height - opt.font_size))
+                best = s;
+        }
+        FT_Select_Size(ft_face, best);
+    } else {
+        FT_Set_Pixel_Sizes(ft_face, 0, opt.font_size);
+    }
+
     hb_font_t *hb_font = hb_ft_font_create(ft_face, NULL);
     hb_buffer_t *buf = hb_buffer_create();
     hb_buffer_add_utf8(buf, text, -1, 0, -1);
@@ -1159,33 +1192,83 @@ static int feh_render_run(uint32_t *data, int img_w, int img_h,
     unsigned int glyph_count;
     hb_glyph_info_t *glyph_info = hb_buffer_get_glyph_infos(buf, &glyph_count);
     hb_glyph_position_t *glyph_pos = hb_buffer_get_glyph_positions(buf, &glyph_count);
+
+    /* scale factor to fit color emoji to font_size */
+    float scale = is_color ? (float)opt.font_size / ft_face->size->metrics.y_ppem : 1.0f;
+
+    uint32_t prev_cluster = 0xFFFFFFFF;
+    int cluster_pen_x = pen_x;
     for (unsigned int i = 0; i < glyph_count; i++) {
-        FT_Load_Glyph(ft_face, glyph_info[i].codepoint, FT_LOAD_RENDER);
+        /* for stacked glyphs (same cluster), don't advance pen_x */
+        if (glyph_info[i].cluster != prev_cluster) {
+            cluster_pen_x = pen_x;
+            prev_cluster = glyph_info[i].cluster;
+        }
+        int load_flags = is_color ? (FT_LOAD_COLOR | FT_LOAD_RENDER) : FT_LOAD_RENDER;
+        FT_Load_Glyph(ft_face, glyph_info[i].codepoint, load_flags);
         FT_Bitmap *gb = &ft_face->glyph->bitmap;
-        int x0 = pen_x + (glyph_pos[i].x_offset >> 6) + ft_face->glyph->bitmap_left;
-        int y0 = baseline - (glyph_pos[i].y_offset >> 6) - ft_face->glyph->bitmap_top;
-        for (int row = 0; row < (int)gb->rows; row++) {
-            for (int col = 0; col < (int)gb->width; col++) {
+
+        /* scale emoji bitmap dimensions to fit font_size */
+        int draw_w = is_color ? (int)(gb->width  * scale) : (int)gb->width;
+        int draw_h = is_color ? (int)(gb->rows   * scale) : (int)gb->rows;
+        int x0 = cluster_pen_x + (int)((glyph_pos[i].x_offset >> 6) + ft_face->glyph->bitmap_left * (is_color ? scale : 1.0f));
+        int y0 = baseline - (int)((glyph_pos[i].y_offset >> 6) + ft_face->glyph->bitmap_top  * (is_color ? scale : 1.0f));
+
+        for (int row = 0; row < draw_h; row++) {
+            for (int col = 0; col < draw_w; col++) {
                 int x = x0 + col;
                 int y = y0 + row;
                 if (x < 0 || x >= img_w || y < 0 || y >= img_h) continue;
-                unsigned char ga = gb->buffer[row * gb->pitch + col];
-                if (ga == 0) continue;
+
                 uint32_t *pixel = &data[y * img_w + x];
-                int src_a = (ga * alpha) / 255;
-                int dst_a = (*pixel >> 24) & 0xFF;
-                int dst_r = (*pixel >> 16) & 0xFF;
-                int dst_g = (*pixel >>  8) & 0xFF;
-                int dst_b = (*pixel      ) & 0xFF;
-                int out_a = src_a + dst_a * (255 - src_a) / 255;
-                int out_r = (r * src_a + dst_r * (255 - src_a)) / 255;
-                int out_g = (g * src_a + dst_g * (255 - src_a)) / 255;
-                int out_b = (b * src_a + dst_b * (255 - src_a)) / 255;
-                *pixel = ((uint32_t)out_a << 24) | ((uint32_t)out_r << 16) |
-                         ((uint32_t)out_g <<  8) |  (uint32_t)out_b;
+
+                if (is_color && gb->pixel_mode == FT_PIXEL_MODE_BGRA) {
+                    /* sample source pixel (nearest neighbour for simplicity) */
+                    int src_row = (int)(row / scale);
+                    int src_col = (int)(col / scale);
+                    if (src_row >= (int)gb->rows) src_row = gb->rows - 1;
+                    if (src_col >= (int)gb->width) src_col = gb->width - 1;
+                    unsigned char *p = &gb->buffer[src_row * gb->pitch + src_col * 4];
+                    unsigned char eb = p[0], eg = p[1], er = p[2], ea = p[3];
+                    if (ea == 0) continue;
+                    /* blend BGRA emoji onto destination */
+                    int src_a = (ea * alpha) / 255;
+                    int dst_a = (*pixel >> 24) & 0xFF;
+                    int dst_r = (*pixel >> 16) & 0xFF;
+                    int dst_g = (*pixel >>  8) & 0xFF;
+                    int dst_b = (*pixel      ) & 0xFF;
+                    int out_a = src_a + dst_a * (255 - src_a) / 255;
+                    int out_r = (er * src_a + dst_r * (255 - src_a)) / 255;
+                    int out_g = (eg * src_a + dst_g * (255 - src_a)) / 255;
+                    int out_b = (eb * src_a + dst_b * (255 - src_a)) / 255;
+                    *pixel = ((uint32_t)out_a << 24) | ((uint32_t)out_r << 16) |
+                             ((uint32_t)out_g <<  8) |  (uint32_t)out_b;
+                } else {
+                    /* regular grayscale glyph */
+                    unsigned char ga = gb->buffer[row * gb->pitch + col];
+                    if (ga == 0) continue;
+                    int src_a = (ga * alpha) / 255;
+                    int dst_a = (*pixel >> 24) & 0xFF;
+                    int dst_r = (*pixel >> 16) & 0xFF;
+                    int dst_g = (*pixel >>  8) & 0xFF;
+                    int dst_b = (*pixel      ) & 0xFF;
+                    int out_a = src_a + dst_a * (255 - src_a) / 255;
+                    int out_r = (r * src_a + dst_r * (255 - src_a)) / 255;
+                    int out_g = (g * src_a + dst_g * (255 - src_a)) / 255;
+                    int out_b = (b * src_a + dst_b * (255 - src_a)) / 255;
+                    *pixel = ((uint32_t)out_a << 24) | ((uint32_t)out_r << 16) |
+                             ((uint32_t)out_g <<  8) |  (uint32_t)out_b;
+                }
             }
         }
-        pen_x += glyph_pos[i].x_advance >> 6;
+        /* only advance pen for last glyph in a cluster */
+        int is_last_in_cluster = (i + 1 >= glyph_count ||
+                                  glyph_info[i+1].cluster != glyph_info[i].cluster);
+        if (is_last_in_cluster) {
+            int advance = is_color ? (int)(ft_face->glyph->advance.x * scale / 64.0f)
+                                   : (glyph_pos[i].x_advance >> 6);
+            pen_x += advance;
+        }
     }
     hb_buffer_destroy(buf);
     hb_font_destroy(hb_font);
@@ -1193,7 +1276,7 @@ static int feh_render_run(uint32_t *data, int img_w, int img_h,
     return pen_x;
 }
 
-static int feh_utf8_text_width(const char *text) {
+int feh_utf8_text_width(const char *text) {
     int pen_x = 0;
     const unsigned char *p = (const unsigned char *)text;
     while (*p) {
@@ -1215,7 +1298,7 @@ static int feh_utf8_text_width(const char *text) {
         run_buf[run_len] = '\0';
         FT_Face ft_face;
         if (FT_New_Face(feh_ft_library, font_path, 0, &ft_face) == 0) {
-            FT_Set_Pixel_Sizes(ft_face, 0, 11);
+            FT_Set_Pixel_Sizes(ft_face, 0, opt.font_size);
             hb_font_t *hb_font = hb_ft_font_create(ft_face, NULL);
             hb_buffer_t *buf = hb_buffer_create();
             hb_buffer_add_utf8(buf, run_buf, -1, 0, -1);
@@ -1244,7 +1327,7 @@ void feh_draw_text_utf8(Imlib_Image im, const char *text,
     int img_h = imlib_image_get_height();
     uint32_t *data = imlib_image_get_data();
     if (!data) return;
-    int baseline = y + 11;
+    int baseline = y + opt.font_size;
     int pen_x = x;
     const unsigned char *p = (const unsigned char *)text;
     while (*p) {
@@ -1272,26 +1355,101 @@ void feh_draw_text_utf8(Imlib_Image im, const char *text,
 }
 /* --- end UTF-8 text rendering --- */
 
+/* wrap UTF-8 text into lines fitting within max_width pixels.
+   Returns a gib_list of char* lines. Caller must free each string and the list. */
+static gib_list *feh_utf8_wrap_string(const char *text, int max_width) {
+    gib_list *lines = NULL;
+    if (!text || !text[0]) return NULL;
+
+    /* measure a space */
+    int space_w = feh_utf8_text_width(" ");
+
+    /* work through text word by word */
+    char line_buf[4096];
+    line_buf[0] = '\0';
+    int line_w = 0;
+
+    const char *p = text;
+    while (*p) {
+        /* find end of word */
+        const char *word_start = p;
+        while (*p && *p != ' ' && *p != '\n') p++;
+        int word_len = p - word_start;
+        if (word_len == 0) { p++; continue; }
+
+        char word[1024];
+        if (word_len >= (int)sizeof(word)) word_len = sizeof(word) - 1;
+        memcpy(word, word_start, word_len);
+        word[word_len] = '\0';
+
+        int word_w = feh_utf8_text_width(word);
+        int new_w = (line_w == 0) ? word_w : line_w + space_w + word_w;
+
+        if (line_w > 0 && new_w > max_width) {
+            /* flush current line */
+            lines = gib_list_add_end(lines, estrdup(line_buf));
+            snprintf(line_buf, sizeof(line_buf), "%s", word);
+            line_w = word_w;
+        } else {
+            if (line_w == 0)
+                snprintf(line_buf, sizeof(line_buf), "%s", word);
+            else {
+                int cur_len = strlen(line_buf);
+                snprintf(line_buf + cur_len, sizeof(line_buf) - cur_len, " %s", word);
+            }
+            line_w = new_w;
+        }
+
+        /* handle newline */
+        if (*p == '\n') {
+            lines = gib_list_add_end(lines, estrdup(line_buf));
+            line_buf[0] = '\0';
+            line_w = 0;
+            p++;
+        } else if (*p == ' ') {
+            p++;
+        }
+    }
+    /* flush last line */
+    if (line_buf[0])
+        lines = gib_list_add_end(lines, estrdup(line_buf));
+
+    return lines;
+}
+
 void feh_draw_filename(winwidget w)
 {
 	static Imlib_Font fn = NULL; /* kept for other functions that still use it */
-	int tw = 0, th = 14, nw = 0;
 	Imlib_Image im = NULL;
 	char *s = NULL;
 	int len = 0;
+	int line_h = opt.font_size + 4;
+	int max_w, total_h, nw;
+	gib_list *fname_lines = NULL, *l;
 
 	if ((!w->file) || (!FEH_FILE(w->file->data))
 			|| (!FEH_FILE(w->file->data)->filename))
 		return;
-
 	if (!feh_ft_library) FT_Init_FreeType(&feh_ft_library);
 	FcInit();
 
-	/* measure text width using UTF-8 aware function */
-	tw = feh_utf8_text_width(FEH_FILE(w->file->data)->filename);
+	/* wrap filename to window width */
+	int wrap_w = w->w > 0 ? w->w - 6 : 800;
+	fname_lines = feh_utf8_wrap_string(FEH_FILE(w->file->data)->filename, wrap_w);
+	if (!fname_lines) return;
 
+	/* measure max line width */
+	max_w = 0;
+	l = fname_lines;
+	while (l) {
+		nw = feh_utf8_text_width((char *)l->data);
+		if (nw > max_w) max_w = nw;
+		l = l->next;
+	}
+
+	/* "N of M" counter */
 	if (gib_list_length(filelist) > 1) {
-		len = snprintf(NULL, 0, "%d of %d",  gib_list_length(filelist),
+		len = snprintf(NULL, 0, "%d of %d", gib_list_length(filelist),
 				gib_list_length(filelist)) + 1;
 		s = emalloc(len);
 		if (w->file)
@@ -1300,33 +1458,39 @@ void feh_draw_filename(winwidget w)
 		else
 			snprintf(s, len, "%d of %d", gib_list_num(filelist, current_file) +
 					1, gib_list_length(filelist));
-
 		nw = feh_utf8_text_width(s);
-
-		if (nw > tw)
-			tw = nw;
+		if (nw > max_w) max_w = nw;
 	}
 
-	tw += 6;
-	th += 3;
-	im = imlib_create_image(tw, 2 * th);
+	max_w += 6;
+	int num_lines = gib_list_length(fname_lines);
+	total_h = line_h * num_lines + (s ? line_h : 0) + 4;
+
+	im = imlib_create_image(max_w, total_h);
 	if (!im)
-		eprintf("Couldn’t create image. Out of memory?");
+		eprintf("Couldn't create image. Out of memory?");
+	feh_imlib_image_fill_text_bg(im, max_w, total_h);
 
-	feh_imlib_image_fill_text_bg(im, tw, 2 * th);
+	/* draw each filename line */
+	int y = 2;
+	l = fname_lines;
+	while (l) {
+		char *line = (char *)l->data;
+		feh_draw_text_utf8(im, line, 2, y,     0,   0,   0, 255);
+		feh_draw_text_utf8(im, line, 1, y - 1, 255, 255, 255, 255);
+		y += line_h;
+		l = l->next;
+	}
+	gib_list_free_and_data(fname_lines);
 
-	/* shadow (black) then white text on top */
-	feh_draw_text_utf8(im, FEH_FILE(w->file->data)->filename, 2, 2, 0, 0, 0, 255);
-	feh_draw_text_utf8(im, FEH_FILE(w->file->data)->filename, 1, 1, 255, 255, 255, 255);
-
+	/* draw "N of M" counter */
 	if (s) {
-		feh_draw_text_utf8(im, s, 2, th + 1, 0, 0, 0, 255);
-		feh_draw_text_utf8(im, s, 1, th, 255, 255, 255, 255);
+		feh_draw_text_utf8(im, s, 2, y,     0,   0,   0, 255);
+		feh_draw_text_utf8(im, s, 1, y - 1, 255, 255, 255, 255);
 		free(s);
 	}
 
 	gib_imlib_render_image_on_drawable(w->bg_pmap, im, 0, 0, 1, 1, 0);
-
 	gib_imlib_free_image_and_decache(im);
 	return;
 }

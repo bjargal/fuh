@@ -92,6 +92,7 @@ struct __fehoptions {
 	char *bg_file;
 	char *image_bg;
 	char *font;
+	int font_size;
 	char *title_font;
 	char *title;
 	char *thumb_title;
@@ -188,6 +189,7 @@ OPTION_alpha = 'a',
 OPTION_bg = 'b',
 OPTION_draw_filename = 'd',
 OPTION_font = 'e',
+	OPTION_font_size = 300,
 OPTION_filelist = 'f',
 OPTION_geometry = 'g',
 OPTION_help = 'h',

@@ -594,7 +594,8 @@ void feh_menu_entry_get_size(feh_menu_item * i, int *w, int *h)
 	int tw, th;
 
 	if (i->text) {
-		gib_imlib_get_text_size(opt.menu_fn, i->text, NULL, &tw, &th, IMLIB_TEXT_TO_RIGHT);
+		tw = feh_utf8_text_width(i->text);
+		th = opt.font_size + 2;
 		*w = tw + FEH_MENUITEM_PAD_LEFT + FEH_MENUITEM_PAD_RIGHT;
 		*h = th + FEH_MENUITEM_PAD_TOP + FEH_MENUITEM_PAD_BOTTOM;
 	} else {
@@ -625,14 +626,14 @@ void feh_menu_calc_size(feh_menu * m)
 		if (h > max_h)
 			max_h = h;
 		if (i->submenu) {
-			next_w = FEH_MENU_SUBMENU_W;
-			if (FEH_MENU_SUBMENU_H > max_h)
-				max_h = FEH_MENU_SUBMENU_H;
+			next_w = opt.font_size;
+			if ((opt.font_size + 3) > max_h)
+				max_h = opt.font_size + 3;
 		}
 		if (i->is_toggle) {
-			toggle_w = FEH_MENU_TOGGLE_W + FEH_MENU_TOGGLE_PAD;
-			if (FEH_MENU_TOGGLE_H > max_h)
-				max_h = FEH_MENU_TOGGLE_H;
+			toggle_w = opt.font_size / 2 + 3;
+			if ((opt.font_size / 2 + 1) > max_h)
+				max_h = opt.font_size / 2 + 1;
 		}
 	}
 
@@ -701,9 +702,9 @@ void feh_menu_draw_item(feh_menu_item * i, Imlib_Image im, int ox, int oy)
 		}
 
 		/* draw text */
-		gib_imlib_text_draw(im, opt.menu_fn, NULL,
+		feh_draw_text_utf8(im, i->text,
 				i->x - ox + i->text_x, i->y - oy + FEH_MENUITEM_PAD_TOP,
-				i->text, IMLIB_TEXT_TO_RIGHT, 0, 0, 0, 255);
+				0, 0, 0, 255);
 		if (i->submenu) {
 			D(("submenu item\n"));
 			feh_menu_draw_submenu_at(i->x + i->sub_x,

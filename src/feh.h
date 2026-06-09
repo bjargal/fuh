@@ -173,6 +173,8 @@ void cb_slide_timer(void *data);
 void cb_reload_timer(void *data);
 int feh_load_image_char(Imlib_Image * im, char *filename);
 void feh_draw_filename(winwidget w);
+void feh_draw_text_utf8(Imlib_Image im, const char *text, int x, int y, int r, int g, int b, int alpha);
+int feh_utf8_text_width(const char *text);
 #ifdef HAVE_LIBEXIF
 void feh_draw_exif(winwidget w);
 #endif

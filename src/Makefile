@@ -41,7 +41,7 @@ OBJECTS = ${TARGETS:.c=.o}
 I_SRCS = ${shell echo *.raw}
 I_DSTS = ${I_SRCS:.raw=.inc}
 
-feh: deps.mk ${OBJECTS} ${I_DSTS}
+fuh: deps.mk ${OBJECTS} ${I_DSTS}
 	${CC} ${LDFLAGS} ${CFLAGS} -o $@ ${OBJECTS} ${LDLIBS}
 
 include deps.mk
@@ -57,7 +57,7 @@ deps.mk: ${TARGETS} ${I_DSTS}
 	${CC} ${CFLAGS} -MM ${TARGETS} > $@
 
 clean:
-	rm -f feh *.o *.inc
+	rm -f fuh *.o *.inc
 
 .PHONY: clean
 

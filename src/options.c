@@ -67,6 +67,7 @@ void init_parse_options(int argc, char **argv)
 	opt.bg_file = NULL;
 	opt.image_bg = NULL;
 	opt.font = NULL;
+	opt.font_size = 11;
 	opt.title_font = NULL;
 	opt.title = NULL;
 	opt.thumb_title = NULL;
@@ -383,6 +384,7 @@ static void feh_parse_option_array(int argc, char **argv, int finalrun)
 		{"bg"            , 1, 0, OPTION_bg},
 		{"draw-filename" , 0, 0, OPTION_draw_filename},
 		{"font"          , 1, 0, OPTION_font},
+			{"font-size"     , 1, 0, OPTION_font_size},
 		{"filelist"      , 1, 0, OPTION_filelist},
 		{"geometry"      , 1, 0, OPTION_geometry},
 		{"help"          , 0, 0, OPTION_help},
@@ -620,6 +622,9 @@ static void feh_parse_option_array(int argc, char **argv, int finalrun)
 			break;
 		case OPTION_font:
 			opt.font = estrdup(optarg);
+			break;
+		case OPTION_font_size:
+			opt.font_size = atoi(optarg);
 			break;
 		case OPTION_filelist:
 			if (!strcmp(optarg, "-"))
